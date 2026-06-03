@@ -1,0 +1,11 @@
+2026-06-04T10:12:05Z INFO Starting deployment for api-service
+2026-06-04T10:12:07Z WARN Pod api-service-7d9c4f9d9b-2m8xk is pending
+2026-06-04T10:12:10Z ERROR Failed to pull image "nginx:1.25.4": failed to resolve image "nginx:1.25.4": pull access denied
+2026-06-04T10:12:12Z ERROR FailedCreatePodSandBox: failed to create pod sandbox: rpc error: code = Unknown desc = failed to start containerd sandbox
+2026-06-04T10:12:18Z WARN Back-off restarting failed container api-service in pod api-service-7d9c4f9d9b-2m8xk
+2026-06-04T10:12:25Z ERROR ImagePullBackOff: Back-off pulling image "nginx:1.25.4"
+2026-06-04T10:13:01Z ERROR CrashLoopBackOff: container api-service is restarting repeatedly
+2026-06-04T10:13:10Z INFO Checking node status
+2026-06-04T10:13:20Z WARN kubelet is reporting high disk usage on node worker-2
+2026-06-04T10:13:45Z ERROR Failed to mount volume "config": secret "api-config" not found
+2026-06-04T10:14:00Z INFO Deployment rollout aborted due to failed pods
