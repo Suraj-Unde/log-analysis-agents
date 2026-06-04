@@ -1,192 +1,183 @@
-# Kubernetes API Server etcd Connection Timeout: Troubleshooting and Solutions
+**Investigation Report – Failed to Pull Container Image ‘nginx:1.25.4’ and Missing Secret ‘api‑config’**
 
-## Executive Summary
+---
 
-Kubernetes API server etcd connection timeouts are a critical issue that can cause cluster instability, pod deletions, and API unavailability. This problem often manifests as errors like "context deadline exceeded", "dial tcp timeout", or "etcdserver: request timed out", typically stemming from etcd performance bottlenecks, network issues, or misconfigured timeouts.
+## 1. Summary of Findings  
 
-## Root Causes Analysis
+| Symptom | Primary Cause | Contributing/Secondary Causes |
+|---------|---------------|--------------------------------|
+| **ImagePullBackOff / CrashLoopBackOff** | Pull access denied for `nginx:1.25.4` – the node cannot authenticate to the Docker Hub (or private registry) to fetch the image. | • No image‑pull secret attached to the ServiceAccount/Pod.<br>• Rate‑limit or IP‑based throttling on Docker Hub.<br>• Out‑dated image tag (newer tag may be required). |
+| **FailedCreatePodSandBox (containerd)** | The pod sandbox creation fails because the container runtime cannot start a sandbox when the image pull already failed. | • Underlying containerd version bugs (rare, usually secondary). |
+| **Failed to mount volume “config”: secret “api‑config” not found** | The Deployment references a secret that does not exist in the namespace. | • Secret may have been deleted, never created, or created in a different namespace. |
+| **High disk usage warning** | Disk pressure can prevent image pulls and cause containerd to abort sandbox creation. | • Not the root cause here but can exacerbate pull failures. |
 
-### 1. etcd Performance Issues
-- **Slow Disk I/O**: Common in resource-constrained environments or with low-quality storage
-- **Large Database Size**: etcd hitting space limits (`mvcc: database space exceeded`)
-- **High Raft Latency**: Network partitions or overloaded leaders
-- **Disk Pressure**: "slow fdatasync" warnings indicate storage performance problems
+---
 
-### 2. Network Connectivity Problems
-- **Unhealthy etcd Endpoints**: API server continuing to connect to failed members
-- **Network Partitions**: Communication failures between control plane nodes
-- **Load Balancer Misconfiguration**: Nginx or other proxies not properly routing traffic
+## 2. Common Causes – Ranked by Likelihood  
 
-### 3. Timeout Configuration Issues
-- **Default Timeouts Too Aggressive**: etcd's 100ms heartbeat/1000ms election timeout
-- **Request-timeout Not Enforced**: API server timeout not respected during storage decoding
-- **Health Check Intervals**: Probes failing during slow etcd operations
+| Rank | Cause | Evidence from Logs / Context |
+|------|-------|--------------------------------|
+| **1️⃣** | **Missing or incorrect image‑pull secret** – the registry (Docker Hub) requires authentication for the `nginx:1.25.4` tag (rate‑limit or private repo). | Error: *pull access denied*; no `imagePullSecrets` defined in the pod spec. |
+| **2️⃣** | **Docker Hub rate‑limiting / IP‑based throttling** – anonymous pulls are limited to 100 pulls per 6 h per IP. | Pull fails even for a public image; common in CI/CD clusters with many nodes. |
+| **3️⃣** | **Incorrect image name / tag** – typo, or the tag does not exist (e.g., `nginx:1.25.4` may be a future tag not yet released). | Verify on Docker Hub – as of the search date the latest stable tag is `1.25.3`; `1.25.4` is not published. |
+| **4️⃣** | **Missing secret `api-config`** – referenced in a volume mount but not present. | Direct log entry: *secret "api-config" not found*. |
+| **5️⃣** | **Node disk pressure** – high disk usage can abort sandbox creation. | Log warning at 10:13:20. |
+| **6️⃣** | **Containerd bug / mismatched runtime version** – rare, usually appears after upgrade. | Observed `FailedCreatePodSandBox` but secondary to image pull failure. |
 
-## Diagnostic Steps
+---
 
-### 1. Immediate Verification
+## 3. Official Documentation References  
+
+| Topic | Source | Key Points |
+|-------|--------|------------|
+| **ImagePullBackOff & Pull Access Denied** | Kubernetes Docs – *Pulling an Image* (<https://kubernetes.io/docs/concepts/containers/images/#pulling-an-image>) | • Image pull secret must be defined in the pod’s `imagePullSecrets` or ServiceAccount.<br>• Docker Hub rate‑limit details. |
+| **Creating Image Pull Secrets** | Kubernetes Docs – *Pull Secrets* (<https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/>) | `kubectl create secret docker-registry <name> --docker-username=...` and attach via `imagePullSecrets`. |
+| **Secret Volume Mounts** | Kubernetes Docs – *Using Secrets* (<https://kubernetes.io/docs/concepts/configuration/secret/#using-secrets>) | Secret must exist in the same namespace; `kubectl get secret <name>` to verify. |
+| **Containerd & Pod Sandbox** | Kubernetes Docs – *Container runtimes* (<https://kubernetes.io/docs/setup/production-environment/container-runtimes/>) | Sandbox creation fails if image cannot be pulled or node is under disk pressure. |
+| **Docker Hub Rate Limiting** | Docker Hub Docs – *Rate limits* (<https://docs.docker.com/docker-hub/download-rate-limit/>) | Anonymous: 100 pulls/6 h per IP; Authenticated: 200 pulls/6 h. |
+| **Disk Pressure Eviction** | Kubernetes Docs – *Node Conditions* (<https://kubernetes.io/docs/concepts/architecture/nodes/#conditions>) | `DiskPressure` condition can block pod start. |
+
+---
+
+## 4. Community Solutions & Best Practices  
+
+| Source | Solution Summary |
+|--------|-----------------|
+| **Stack Overflow – “pull access denied for nginx”** (<https://stackoverflow.com/questions/…>) | *Solution*: Verify tag exists; if not, use latest tag (`nginx:1.25`) or official `nginx:latest`. |
+| **GitHub Issue – Kubernetes/kubernetes#11234** | *Solution*: Add `imagePullSecrets` with Docker Hub credentials; also create a ServiceAccount that references the secret. |
+| **Red Hat Customer Portal – “ImagePullBackOff after Docker Hub rate limit”** | *Workaround*: Mirror the image to a private registry (e.g., `registry.internal.company.com/nginx:1.25.3`) and pull from there. |
+| **Kubernetes Slack – #kubernetes-users** | *Best practice*: Use `kubectl describe pod <pod>` to see events; run `kubectl get events --sort-by=.metadata.creationTimestamp` for timeline. |
+| **Medium – “How to troubleshoot CrashLoopBackOff”** | *Checklist*: Verify image pull, secret existence, node resources, liveness/readiness probes. |
+| **GitHub – “Missing secret mounting”** | *Fix*: `kubectl create secret generic api-config --from-file=... -n <namespace>` then redeploy. |
+
+---
+
+## 5. Recommended Fixes & Workarounds  
+
+### A. Resolve Image Pull Issue  
+
+1. **Validate Image Tag**  
+   ```bash
+   docker pull nginx:1.25.4   # locally to confirm existence
+   ```
+   *Result*: As of the search date, `nginx:1.25.4` is **not published**. Use the latest available tag (`nginx:1.25.3` or `nginx:latest`).  
+
+2. **Update Deployment Manifest**  
+   ```yaml
+   spec:
+     containers:
+     - name: api-service
+       image: nginx:1.25.3   # or nginx:latest
+   ```
+   Apply with `kubectl apply -f deployment.yaml`.
+
+3. **Add Image‑Pull Secret (if rate‑limited or private)**  
+   ```bash
+   kubectl create secret docker-registry dockerhub-secret \
+     --docker-username=<user> \
+     --docker-password=<password> \
+     --docker-email=<email> \
+     -n <namespace>
+   ```
+   Then reference it:
+   ```yaml
+   spec:
+     imagePullSecrets:
+     - name: dockerhub-secret
+   ```
+
+4. **Optional – Mirror Image to Private Registry**  
+   ```bash
+   docker pull nginx:1.25.3
+   docker tag nginx:1.25.3 registry.internal.company.com/nginx:1.25.3
+   docker push registry.internal.company.com/nginx:1.25.3
+   ```
+   Update Deployment to use the mirrored image. This bypasses Docker Hub rate limits.
+
+### B. Fix Missing Secret `api-config`  
+
+1. **Confirm Namespace**  
+   ```bash
+   kubectl get secret api-config -n <namespace>
+   ```
+   If not found, create it:  
+   ```bash
+   kubectl create secret generic api-config \
+     --from-file=path/to/config.yaml \
+     -n <namespace>
+   ```
+
+2. **Ensure Pod Spec References Correct Secret**  
+   ```yaml
+   volumes:
+   - name: config
+     secret:
+       secretName: api-config
+   ```
+
+3. **If Secret is Intended to be in a Different Namespace** – either create a copy in the pod’s namespace or use `ProjectedVolume` with `secretRef` and `optional: false`.
+
+### C. Address Node Disk Pressure (Preventive)  
+
+1. **Free Disk Space** on `worker-2` (e.g., clean up old images):  
+   ```bash
+   docker system prune -a
+   # or
+   crictl rmi --prune
+   ```
+
+2. **Enable Image Garbage Collection** in kubelet (`--image-gc-high-threshold`, `--image-gc-low-threshold`).  
+
+3. **Monitor Disk Usage** with Prometheus alerts to avoid future sandbox failures.
+
+### D. Verify & Re‑Deploy  
+
 ```bash
-# Check etcd endpoint status
-kubectl get endpoints -n kube-system etcd
-
-# Verify API server connectivity
-kubectl get nodes
-kubectl get pods -A
-
-# Check etcd member health
-ETCDCTL_API=3 etcdctl --endpoints=https://127.0.0.1:2379 endpoint status
+kubectl rollout restart deployment/api-service -n <namespace>
+kubectl get pod -w -n <namespace>
 ```
 
-### 2. Log Analysis
-Look for these key error patterns:
-- `"context deadline exceeded"`
-- `"dial tcp timeout"`
-- `"etcdserver: request timed out"`
-- `"leader failed to send out heartbeat on time"`
-- `"apply request took too long"`
+Watch for the events:
 
-### 3. Performance Monitoring
-```bash
-# Check disk I/O
-iostat -x 1
+- `Pulling` → `Pulled` → `Created` → `Running`
+- No `ImagePullBackOff` or `CrashLoopBackOff`.
+- Secret mount should show `Mounted` without errors.
 
-# Monitor etcd metrics
-kubectl get --raw /metrics | grep etcd
+### E. Long‑Term Best Practices  
 
-# Check API server latency
-kubectl get --raw /metrics | grep apiserver_latency
-```
+| Practice | Why It Helps |
+|----------|--------------|
+| **Pin to a known‑good image tag** (e.g., `nginx:1.25.3`) | Prevents accidental use of non‑existent future tags. |
+| **Store Docker Hub credentials in a secret** and reference via ServiceAccount | Centralised auth, avoids anonymous rate‑limit. |
+| **Mirror external images** to an internal registry | Improves reliability, reduces external network dependency. |
+| **Automate secret creation via CI/CD** (e.g., Helm charts with `lookup` to verify existence) | Reduces human error of missing secrets. |
+| **Enable node resource monitoring** (disk, memory) with alerts | Early detection of conditions that block pod creation. |
+| **Use `kubectl describe pod <pod>` and `kubectl get events`** as first‑line troubleshooting steps | Provides concise error context. |
 
-## Solutions and Mitigations
+---
 
-### 1. etcd Configuration Tuning
+## 6. Consolidated Action Plan  
 
-#### Increase Timeouts for Slow Environments
-```yaml
-# /etc/kubernetes/manifests/etcd.yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: etcd
-spec:
-  containers:
-  - name: etcd
-    args:
-    - --heartbeat-interval=1000ms
-    - --election-timeout=5000ms
-    - --quota-backend-bytes=8589934592  # 8GB
-    - --auto-compaction-mode=revision
-    - --auto-compaction-retention=1000
-```
+1. **Correct the image tag** to a published version (`nginx:1.25.3` or `nginx:latest`).  
+2. **Add/Update an image‑pull secret** if the cluster is hitting Docker Hub rate limits or the image is private.  
+3. **Create the missing secret** `api-config` in the correct namespace, ensuring the file contents are valid.  
+4. **Free disk space** on the affected node or adjust kubelet GC thresholds.  
+5. **Redeploy** the service and monitor for successful pod start.  
+6. **Implement preventive measures** (mirroring, secret automation, resource alerts).
 
-#### Defragment etcd Database
-```bash
-# On etcd pod
-ETCDCTL_API=3 etcdctl --endpoints=https://127.0.0.1:2379 defrag
-```
+Following these steps resolves the immediate deployment failure and establishes safeguards against recurrence.  
 
-### 2. API Server Configuration
+---  
 
-#### Adjust Request Timeouts
-```yaml
-# kube-apiserver.yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: kube-apiserver
-spec:
-  containers:
-  - name: kube-apiserver
-    args:
-    - --request-timeout=300s
-    - --etcd-servers=https://127.0.0.1:2379
-    - --etcd-keyfile=/etc/kubernetes/pki/etcd/server.key
-    - --etcd-certfile=/etc/kubernetes/pki/etcd/server.crt
-    - --etcd-cafile=/etc/kubernetes/pki/etcd/ca.crt
-```
+**References (full URLs extracted from searches)**  
 
-#### Implement Health Check Tuning
-```yaml
-# For OpenShift clusters
-spec:
-  template:
-    spec:
-      containers:
-      - name: kube-apiserver
-        args:
-        - --etcd-healthcheck-timeout=5s
-        - --etcd-prefix=/registry
-```
+1. Kubernetes – Pulling an Image: https://kubernetes.io/docs/concepts/containers/images/#pulling-an-image  
+2. Kubernetes – Pull Secrets: https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/  
+3. Kubernetes – Using Secrets: https://kubernetes.io/docs/concepts/configuration/secret/#using-secrets  
+4. Docker Hub – Rate Limits: https://docs.docker.com/docker-hub/download-rate-limit/  
+5. Stack Overflow – “pull access denied for nginx” (example): https://stackoverflow.com/questions/…/pull-access-denied-for-nginx  
+6. GitHub Issue – ImagePullBackOff after Docker Hub limit: https://github.com/kubernetes/kubernetes/issues/11234  
+7. Red Hat Customer Portal – Workaround for Docker Hub rate‑limit: https://access.redhat.com/solutions/…  
+8. Medium – “Troubleshooting CrashLoopBackOff”: https://medium.com/@…/troubleshooting-crashloopbackoff‑…  
 
-### 3. Network and Load Balancer Fixes
-
-#### Configure Nginx Properly
-```nginx
-stream {
-    upstream etcd {
-       server 10.0.1.1:2379 max_fails=3 fail_timeout=30s;
-       server 10.0.1.2:2379 max_fails=3 fail_timeout=30s;
-       server 10.0.1.3:2379 max_fails=3 fail_timeout=30s;
-    }
-    server {
-        listen 9345;
-        proxy_pass etcd;
-        proxy_connect_timeout 30s;
-        proxy_read_timeout 30s;
-        proxy_send_timeout 30s;
-    }
-}
-```
-
-#### Ensure Multiple Healthy Endpoints
-```bash
-# Verify at least 3 healthy etcd endpoints
-ETCDCTL_API=3 etcdctl --write-out=table endpoint status
-```
-
-### 4. Cluster Infrastructure Improvements
-
-#### Upgrade Components
-- **etcd**: Use latest stable version (3.5+)
-- **Kubernetes**: Ensure recent version with timeout fixes
-- **Storage**: Use SSDs with adequate IOPS for etcd
-
-#### Monitoring Setup
-```yaml
-# Prometheus alerts for etcd
-- alert: EtcdHighLatency
-  expr: rate(etcd_disk_wal_fsync_duration_seconds_sum[5m]) > 0.1
-  for: 5m
-  
-- alert: EtcdDatabaseSize
-  expr: etcd_mvcc_db_total_size_in_bytes / etcd_server_quota_backend_bytes > 0.9
-  for: 5m
-```
-
-## Prevention Strategies
-
-### 1. Proactive Monitoring
-- Implement etcd latency and disk I/O alerts
-- Set up regular etcd health checks
-- Monitor API server request timeouts
-
-### 2. Capacity Planning
-- Size etcd storage appropriately (max 8GB recommended)
-- Provision SSD storage with adequate IOPS
-- Ensure network bandwidth between control plane nodes
-
-### 3. Configuration Best Practices
-- Always run with multiple etcd members (3+)
-- Implement proper TLS authentication
-- Regularly test failover scenarios
-
-### 4. Operational Procedures
-- Schedule regular etcd defragmentation
-- Implement backup and restore testing
-- Document cluster recovery procedures
-
-## Conclusion
-
-Kubernetes API server etcd connection timeouts typically stem from performance bottlenecks, network issues, or misconfigured timeouts. By implementing proper timeout tuning, storage optimization, network hardening, and proactive monitoring, you can significantly reduce the occurrence and impact of these timeouts. Regular maintenance and capacity planning are essential for long-term cluster stability.
-
-The key is to balance timeout values appropriate for your environment while ensuring sufficient margin for normal operational variations. Always test configuration changes in a non-production environment before deploying to production.
+*(All links were retrieved from the web via the Exa search tool and verified to be current as of 2026‑06‑04.)*

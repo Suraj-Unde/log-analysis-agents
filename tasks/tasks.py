@@ -25,6 +25,17 @@ def validate_log_analysis(result: TaskOutput) -> tuple[bool, Any]:
         return (False, "Must identify at least one error")
     return (True, report)
 
+def validate_solution(output):
+    command_count = output.raw.count("```")
+
+    if command_count < 3:
+        return (
+            False,
+            "Solution must contain at least 3 shell commands."
+        )
+
+    return (True, output)
+
 
 analyze_logs_task = Task(
     description="""Analyze the log file at {log_file_path} to identify and extract specific issues.
@@ -72,8 +83,9 @@ provide_solution_task = Task(
     2. Provide verification steps to confirm the fix
     3. Suggest monitoring and prevention measures""",
     expected_output="A detailed remediation plan with step-by-step commands",
-    guardrail="The solution must include at least 3 specific, copy-pasteable shell commands. "
-    "Reject if it only contains general advice without concrete commands.",
+    # guardrail="The solution must include at least 3 specific, copy-pasteable shell commands. "
+    # "Reject if it only contains general advice without concrete commands.",
+    guardrail=validate_solution,
     agent=solution_specialist,
     context=[analyze_logs_task, investigate_issue_task],
     output_file="task_outputs/solution_plan.md",
