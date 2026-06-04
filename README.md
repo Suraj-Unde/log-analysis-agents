@@ -140,6 +140,6 @@ The sample input used by the demo is the repository file kubernetes_log.log.
 
 ## Notes
 
-- The .env file is required because the agents and tools load environment variables at startup.
+- The .env file is required because the agents and tools load environment variables at startup so create a .env in your current environment.
 - The OpenRouter key must have available credits for the LLM requests to succeed.
 - The current system is intentionally simple and easy to extend with more agents, more tools, or more structured output formats.
