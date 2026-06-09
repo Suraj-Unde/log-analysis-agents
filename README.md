@@ -1,6 +1,6 @@
 # log-analysis-agents
 
-This project is a small CrewAI-based multi-agent system for analyzing Kubernetes-style deployment logs, finding root causes, investigating related issues online, and generating a remediation plan.
+A small CrewAI-based multi-agent system for analyzing Kubernetes-style deployment logs, finding likely root causes, researching related issues online, and generating a remediation plan.
 
 ## What this project does
 
@@ -16,40 +16,48 @@ The system is designed to simulate a DevOps troubleshooting workflow with AI age
 
 The repository is organized as follows:
 
-- main.py — entry point that creates the crew and starts the workflow.
-- agents/agents.py — defines the three agents and their LLM configuration.
-- tasks/tasks.py — defines the tasks, expected outputs, and guardrail validation.
-- tools/tools.py — wires the file-reader tool and the EXA web-search tool.
-- kubernetes_log.log — sample log used for the demo run.
-- task_outputs/ — generated reports from the crew run.
+```text
+.
+|-- main.py                  # Entry point that creates the crew and starts the workflow
+|-- agents/
+|   `-- agents.py            # Agent definitions and LLM configuration
+|-- tasks/
+|   `-- tasks.py             # Tasks, expected outputs, and guardrail validation
+|-- tools/
+|   `-- tools.py             # File reader and EXA web-search tool wiring
+|-- kubernetes_log.log       # Sample log used for the demo run
+|-- task_outputs/            # Generated reports from the crew run
+|-- requirements.txt         # Python dependencies
+`-- README.md
+```
 
 ### High-level flow
 
-1. main.py loads the sample log path and creates a Crew with three tasks.
+1. `main.py` loads the sample log path and creates a Crew with three tasks.
 2. The first task asks the Log Analyzer to inspect the log file.
 3. The second task uses the investigation agent to search for similar issues online.
 4. The third task uses the solution agent to summarize the result as a remediation plan.
-5. Task outputs are saved under task_outputs/.
+5. Task outputs are saved under `task_outputs/`.
 
 ## Multi-agent workflow
 
 The current crew uses a sequential process:
 
-- Process: sequential
+- Process: `sequential`
 - Agents:
-  - log_analyzer
-  - issue_investigator
-  - solution_specialist
+  - `log_analyzer`
+  - `issue_investigator`
+  - `solution_specialist`
 - Tasks:
-  - analyze_logs_task
-  - investigate_issue_task
-  - provide_solution_task
+  - `analyze_logs_task`
+  - `investigate_issue_task`
+  - `provide_solution_task`
 
-Each task depends on the previous findings for context, which makes the system behave like a chain of reasoning:
+Each task depends on the previous findings for context:
 
-- Analyze the raw log
-- Investigate the likely root cause
-- Generate a concrete solution
+1. Analyze the raw log.
+2. Investigate the likely root cause.
+3. Generate a concrete solution.
 
 This is the core multi-agent design of the project.
 
@@ -60,86 +68,116 @@ This is the core multi-agent design of the project.
 Role: analyze log files and identify incidents, errors, warnings, timelines, and likely root causes.
 
 Responsibilities:
-- Parse deployment and runtime log lines
-- Detect error patterns such as ImagePullBackOff, CrashLoopBackOff, and sandbox failures
-- Create a structured analysis report
+
+- Parse deployment and runtime log lines.
+- Detect error patterns such as `ImagePullBackOff`, `CrashLoopBackOff`, and sandbox failures.
+- Create a structured analysis report.
 
 ### 2. DevOps Issue Investigator
 
 Role: research the identified problem using external search.
 
 Responsibilities:
-- Search the internet for related error messages
-- Gather official docs, forum posts, and known troubleshooting guidance
-- Rank likely causes and proven fixes
+
+- Search the internet for related error messages.
+- Gather official docs, forum posts, and known troubleshooting guidance.
+- Rank likely causes and proven fixes.
 
 ### 3. DevOps Solution Specialist
 
 Role: convert investigation findings into actionable remediation steps.
 
 Responsibilities:
-- Produce a step-by-step remediation plan
-- Include commands and verification steps
-- Recommend monitoring and prevention measures
+
+- Produce a step-by-step remediation plan.
+- Include commands and verification steps.
+- Recommend monitoring and prevention measures.
 
 ## Tools used by the agents
 
 ### File reader tool
 
-The log analyzer uses a file reader tool to inspect the sample log file.
+The log analyzer uses CrewAI's `FileReadTool` to inspect the sample log file.
 
 ### EXA search tool
 
-The investigation agent uses EXA to search the public web for similar issues and community guidance.
+The investigation agent uses `EXASearchTool` to search the public web for similar issues and community guidance.
 
 ## Guardrails and quality checks
 
-The project includes a simple guardrail in tasks/tasks.py:
+The project includes two simple guardrails in `tasks/tasks.py`:
 
-- The log analysis task validates that at least one error was actually found.
-- If the model output is too vague or empty, the task is retried.
+- The log analysis task validates that at least one error was found.
+- The solution task validates that the final answer includes concrete shell command blocks.
 
-This helps reduce low-quality or empty analysis results.
+If a guardrail fails, CrewAI retries the task. This helps reduce vague or incomplete outputs.
 
 ## Output artifacts
 
-After a run, the project writes reports to task_outputs/:
+After a run, the project writes reports to `task_outputs/`:
 
-- log_analysis.md
-- investigation_report.md
-- solution_plan.md
+- `log_analysis.md`
+- `investigation_report.md`
+- `solution_plan.md`
 
-These files capture the different stages of the multi-agent reasoning process.
+These files capture the different stages of the multi-agent troubleshooting process.
 
 ## Setup
 
-1. Use Python 3.13 for the project environment. The current dependency set is tested against Python 3.13.
-2. Create the project virtual environment:
+1. Use Python 3.13. The current dependency set is tested against Python 3.13.
+2. Create a virtual environment:
+
+   ```powershell
    py -3.13 -m venv .venv
+   ```
+
 3. Activate it in PowerShell:
+
+   ```powershell
    .\.venv\Scripts\Activate.ps1
+   ```
+
 4. Install dependencies:
+
+   ```powershell
    python -m pip install -r requirements.txt
-5. Add your API keys to .env before running the crew.
+   ```
 
-### Model configuration
+5. Create a `.env` file in the project root and add the required API keys:
 
-The default model is configured in agents/agents.py and can be overridden with OPENROUTER_MODEL in .env.
+   ```env
+   EXA_API_KEY=your_exa_api_key
+   ```
 
-Recommended notes:
-- Free OpenRouter models are rate-limited and may return 429 or 402 errors when quota is exhausted.
-- If you hit those limits, add credits at OpenRouter or switch to a paid model in .env.
+   Add any LLM provider keys required by the model configuration in `agents/agents.py`.
+
+## Model configuration
+
+The active LLM configuration is defined in `agents/agents.py`.
+
+The file currently reads `OPENROUTER_MODEL` into `selected_model`, but the agent LLM instances are configured directly in code. If you want runtime model switching, update the `LLM(...)` definitions to use environment variables for the model name and API key.
+
+Security note: keep API keys in `.env` and avoid committing real credentials to source control.
 
 ## Run
 
 From the project root:
 
+```powershell
 python main.py
+```
 
-The sample input used by the demo is the repository file kubernetes_log.log.
+The demo uses the sample input file:
+
+```text
+kubernetes_log.log
+```
+
+When the run finishes, review the generated files in `task_outputs/`.
 
 ## Notes
 
-- The .env file is required because the agents and tools load environment variables at startup so create a .env in your current environment.
-- The OpenRouter key must have available credits for the LLM requests to succeed.
+- The `.env` file is required because the agents and tools load environment variables at startup.
+- `EXA_API_KEY` is required for online investigation.
+- The configured LLM provider key must have enough quota for the agent requests to succeed.
 - The current system is intentionally simple and easy to extend with more agents, more tools, or more structured output formats.
